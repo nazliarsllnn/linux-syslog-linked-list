@@ -3,88 +3,126 @@
 #include <string.h>
 #include <time.h>
 
-// Syslog kay�tlar�n� temsil eden yap� (Node)
+/**
+ * LogNode Yapısı:
+ * Bu yapı, her bir Syslog kaydını temsil eden bir düğüm (node) birimidir.
+ * Çift bağlı liste (Doubly Linked List) prensibiyle tasarlanmıştır.
+ */
 typedef struct LogNode {
-    char timestamp[32];   // Logun olu�tu�u zaman
-    int priority;         // �ncelik seviyesi (0: Acil, 1: Hata, 2: Bilgi vb.)
-    char message[256];    // Log mesaj�
-    struct LogNode* next; // Bir sonraki d���m
-    struct LogNode* prev; // Bir �nceki d���m (�ift ba�l� liste �zelli�i)
+    char timestamp[32];   // Kaydın tam olarak ne zaman oluştuğunu tutan karakter dizisi.
+    int priority;         // Mesajın önem derecesi (0: En yüksek/Acil, 7: En düşük/Hata Ayıklama).
+    char message[256];    // Sistemin veya kullanıcının ürettiği log mesajı metni.
+    struct LogNode* next; // Listedeki bir sonraki günlük kaydına işaret eden pointer.
+    struct LogNode* prev; // Listedeki bir önceki günlük kaydına işaret eden pointer (Geriye dönük analiz için).
 } LogNode;
 
-// Yeni bir log d���m� olu�turma fonksiyonu
+/**
+ * create_log_node Fonksiyonu:
+ * Bellekten dinamik olarak yer ayırarak yeni bir günlük düğümü oluşturur.
+ * Neden: Log sayısı önceden bilinmediği için heap bellek yönetimi (malloc) kullanılmıştır.
+ */
 LogNode* create_log_node(int priority, const char* msg) {
+    // malloc ile düğüm büyüklüğünde bellek tahsis edilir.
     LogNode* newNode = (LogNode*)malloc(sizeof(LogNode));
+    
+    // Bellek yetersizliği durumunda programın çökmesini engellemek için kontrol yapılır.
     if (newNode == NULL) {
-        printf("Bellek hatasi!\n");
+        printf("Hata: Dinamik bellek tahsisi basarisiz oldu!\n");
         return NULL;
     }
 
-    // Sistem zaman�n� al
+    // time.h kütüphanesi fonksiyonları ile o anki sistem saati saniye hassasiyetinde alınır.
     time_t rawtime;
     struct tm * timeinfo;
     time(&rawtime);
     timeinfo = localtime(&rawtime);
+    
+    // strftime: Zaman verisini okunabilir "YIL-AY-GUN SAAT:DAKIKA:SANIYE" formatına çevirir.
     strftime(newNode->timestamp, 32, "%Y-%m-%d %H:%M:%S", timeinfo);
 
+    // Parametre olarak gelen öncelik ve mesaj bilgileri düğüme kopyalanır.
     newNode->priority = priority;
-    strncpy(newNode->message, msg, 256);
+    strncpy(newNode->message, msg, 256); // strncpy: Buffer overflow (taşma) riskini önlemek için güvenli kopyalama yapar.
+    
+    // Yeni düğüm henüz bir listeye bağlanmadığı için uçları boş (NULL) bırakılır.
     newNode->next = NULL;
     newNode->prev = NULL;
     
     return newNode;
 }
 
-// Listeye yeni log ekleme (Sona ekleme - FIFO mant���)
+/**
+ * add_log Fonksiyonu:
+ * Yeni oluşturulan log düğümünü listenin en sonuna ekler.
+ * Neden: Log kayıtları zaman sırasına göre (FIFO - First In First Out) tutulmalıdır.
+ */
 void add_log(LogNode** head, int priority, const char* msg) {
+    // Önce eklenecek veri için bellek hazırlanır.
     LogNode* newNode = create_log_node(priority, msg);
+    
+    // Eğer liste henüz boşsa, yeni düğüm listenin ilk elemanı (Head) olur.
     if (*head == NULL) {
         *head = newNode;
         return;
     }
 
+    // Liste boş değilse, listenin son düğümünü bulmak için 'temp' ile tarama yapılır.
     LogNode* temp = *head;
     while (temp->next != NULL) {
         temp = temp->next;
     }
     
+    // Bağlantılar kurulur: Son düğümün 'sonrası' yeni düğüm, yeni düğümün 'öncesi' ise eski son düğüm olur.
     temp->next = newNode;
     newNode->prev = temp;
 }
 
-// Loglar� ba�tan sona listeleme
+/**
+ * display_logs Fonksiyonu:
+ * Baştan başlayarak tüm listeyi ekrana yazdırır.
+ * Bu fonksiyon, sistem günlüğünün okunabilir bir raporunu sunar.
+ */
 void display_logs(LogNode* head) {
-    printf("\n--- SISTEM GUNLUKLERI (SYSLOG) ---\n");
+    printf("\n--- LINUX SISTEM GUNLUKLERI (SYSLOG) ---\n");
     LogNode* temp = head;
+    
+    // temp pointer'ı NULL olana kadar (listenin sonuna kadar) ilerler.
     while (temp != NULL) {
-        printf("[%s] Oncelik: %d | Mesaj: %s\n", 
+        printf("[%s] [Seviye: %d] >> %s\n", 
                temp->timestamp, temp->priority, temp->message);
         temp = temp->next;
     }
+    printf("----------------------------------------\n");
 }
 
-// Belle�i serbest b�rakma (Memory management)
+/**
+ * free_logs Fonksiyonu:
+ * Program sonlanırken malloc ile ayrılan tüm belleği işletim sistemine iade eder.
+ * Neden: "Memory Leak" (Bellek Sızıntısı) oluşmasını engellemek için her düğüm tek tek free edilmelidir.
+ */
 void free_logs(LogNode* head) {
     LogNode* temp;
     while (head != NULL) {
-        temp = head;
-        head = head->next;
-        free(temp);
+        temp = head;       // Silinecek düğüm işaretlenir.
+        head = head->next; // Bir sonraki düğüme geçilir.
+        free(temp);        // İşaretlenen düğüm bellekten temizlenir.
     }
 }
 
 int main() {
+    // Listenin başlangıç noktası (Kök pointer).
     LogNode* syslog_list = NULL;
 
-    // �rnek log kay�tlar� ekleyelim
-    add_log(&syslog_list, 1, "Sistem baslatildi.");
-    add_log(&syslog_list, 2, "Kullanici giris yapti: admin");
-    add_log(&syslog_list, 0, "KRITIK: Disk doluluk orani %95!");
+    // Simülasyon: Örnek günlük kayıtlarının sisteme işlenmesi.
+    add_log(&syslog_list, 1, "Sistem baslatildi. Kernel yukleniyor.");
+    add_log(&syslog_list, 2, "Kullanici giris denemesi: admin");
+    add_log(&syslog_list, 0, "UYARI: Islemci sicakligi kritik seviyeye ulasti!");
+    add_log(&syslog_list, 4, "Ağ baglantisi kuruldu: eth0");
 
-    // Loglar� ekranda g�ster
+    // Mevcut logların kullanıcıya sunulması.
     display_logs(syslog_list);
 
-    // Program kapanmadan belle�i temizle
+    // Program biterken kaynakların temizlenmesi.
     free_logs(syslog_list);
 
     return 0;
